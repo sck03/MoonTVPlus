@@ -989,6 +989,13 @@ function PlayPageClient() {
     if (video.hasAttribute('disableRemotePlayback')) {
       video.removeAttribute('disableRemotePlayback');
     }
+
+    // 确保 playsinline 属性存在（iOS 兼容性）
+    video.setAttribute('playsinline', 'true');
+    video.setAttribute('webkit-playsinline', 'true');
+    // 使用 property 方式也设置一次，确保兼容性
+    (video as any).playsInline = true;
+    (video as any).webkitPlaysInline = true;
   };
 
   // Wake Lock 相关函数
@@ -2794,6 +2801,37 @@ function PlayPageClient() {
       typeof window !== 'undefined' &&
       typeof (window as any).webkitConvertPointFromNodeToPage === 'function';
 
+    // 检测是否为 iOS 设备（iPhone、iPad、iPod）
+    const isIOS = (() => {
+      if (typeof window === 'undefined') return false;
+
+      const ua = navigator.userAgent;
+
+      // 排除 Windows Phone（它的 UA 中也包含 iPhone）
+      if ((window as any).MSStream) return false;
+
+      // 方法1：检测 UA 中的 iOS 设备标识
+      if (/iPad|iPhone|iPod/.test(ua)) {
+        console.log('[设备检测] iOS 设备（通过 UA）:', ua);
+        return true;
+      }
+
+      // 方法2：检测 iPad（iOS 13+ 桌面模式）
+      // 条件：UA 包含 Mac + 支持触摸 + 不是 Windows/Linux
+      const isMacUA = ua.includes('Mac OS X');
+      const hasTouch = 'ontouchend' in document;
+      const isNotWindows = !ua.includes('Windows');
+      const isNotLinux = !ua.includes('Linux');
+
+      if (isMacUA && hasTouch && isNotWindows && isNotLinux) {
+        console.log('[设备检测] iPad 桌面模式:', { ua, hasTouch });
+        return true;
+      }
+
+      console.log('[设备检测] 非 iOS 设备:', { ua, hasTouch });
+      return false;
+    })();
+
     // 非WebKit浏览器且播放器已存在，使用switch方法切换
     if (!isWebkit && artPlayerRef.current) {
       artPlayerRef.current.switch = videoUrl;
@@ -2853,8 +2891,8 @@ function PlayPageClient() {
         flip: false,
         playbackRate: true,
         aspectRatio: false,
-        fullscreen: true,
-        fullscreenWeb: true,
+        fullscreen: !isIOS,  // iOS 禁用原生全屏按钮，避免触发系统播放器
+        fullscreenWeb: true,  // 保留网页全屏按钮（所有平台）
         subtitleOffset: false,
         miniProgressBar: false,
         mutex: true,
@@ -2869,7 +2907,9 @@ function PlayPageClient() {
         lock: true,
         moreVideoAttr: {
           crossOrigin: 'anonymous',
-        },
+          playsInline: true,
+          'webkit-playsinline': 'true',
+        } as any,
         // HLS 支持配置
         customType: {
           m3u8: function (video: HTMLVideoElement, url: string) {
@@ -2906,6 +2946,12 @@ function PlayPageClient() {
             video.hls = hls;
 
             ensureVideoSource(video, url);
+
+            // 额外确保 iOS 内联播放属性（防止全屏时使用系统播放器）
+            video.setAttribute('playsinline', 'true');
+            video.setAttribute('webkit-playsinline', 'true');
+            (video as any).playsInline = true;
+            (video as any).webkitPlaysInline = true;
 
             hls.on(Hls.Events.ERROR, function (event: any, data: any) {
               console.error('HLS Error:', event, data);
@@ -3198,6 +3244,40 @@ function PlayPageClient() {
               handleNextEpisode();
             },
           },
+          // iOS 设备上添加自定义网页全屏按钮（竖屏时显示，横屏时隐藏）
+          ...(isIOS ? [{
+            position: 'right',
+            index: 100,  // 大数字确保在设置按钮右边
+            html: '<i class="art-icon ios-portrait-fullscreen"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z" fill="currentColor"/></svg></i>',
+            tooltip: '网页全屏',
+            style: {
+              color: '#fff',
+            },
+            mounted: function($el: HTMLElement) {
+              // 添加 CSS 样式：横屏时隐藏，竖屏时显示
+              const style = document.createElement('style');
+              style.textContent = `
+                /* 横屏时隐藏 iOS 自定义全屏按钮 */
+                @media (orientation: landscape) {
+                  .ios-portrait-fullscreen {
+                    display: none !important;
+                  }
+                }
+                /* 竖屏时显示 iOS 自定义全屏按钮 */
+                @media (orientation: portrait) {
+                  .ios-portrait-fullscreen {
+                    display: inline-flex !important;
+                  }
+                }
+              `;
+              document.head.appendChild(style);
+            },
+            click: function () {
+              if (artPlayerRef.current) {
+                artPlayerRef.current.fullscreenWeb = !artPlayerRef.current.fullscreenWeb;
+              }
+            },
+          }] : []),
         ],
       });
 
@@ -3208,6 +3288,33 @@ function PlayPageClient() {
         // 标记播放器已就绪，触发 usePlaySync 设置事件监听器
         setPlayerReady(true);
         console.log('[PlayPage] Player ready, triggering sync setup');
+
+        // iOS 全屏拦截：强制使用 Web 全屏而不是原生全屏
+        if (isIOS && artPlayerRef.current) {
+          console.log('[iOS] 设置全屏拦截，强制使用 Web 全屏');
+
+          // 保存原始的 fullscreen 属性描述符
+          const player = artPlayerRef.current;
+          const originalFullscreenDescriptor = Object.getOwnPropertyDescriptor(
+            Object.getPrototypeOf(player),
+            'fullscreen'
+          );
+
+          // 覆盖 fullscreen 属性，将其重定向到 fullscreenWeb
+          Object.defineProperty(player, 'fullscreen', {
+            get() {
+              return player.fullscreenWeb;
+            },
+            set(value: boolean) {
+              console.log('[iOS] 拦截 fullscreen 设置，重定向到 fullscreenWeb:', value);
+              player.fullscreenWeb = value;
+            },
+            configurable: true,
+            enumerable: true,
+          });
+
+          console.log('[iOS] 已覆盖 fullscreen 属性，所有全屏操作将使用 Web 全屏');
+        }
 
         // 从 art.storage 读取弹幕设置并应用
         if (artPlayerRef.current) {
