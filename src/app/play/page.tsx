@@ -732,6 +732,7 @@ function PlayPageClient() {
   const [sourceSearchError, setSourceSearchError] = useState<string | null>(
     null
   );
+  const [backgroundSourcesLoading, setBackgroundSourcesLoading] = useState(false);
 
   // 优选和测速开关
   const [optimizationEnabled] = useState<boolean>(() => {
@@ -1966,6 +1967,43 @@ function PlayPageClient() {
     const fetchSourcesData = async (query: string): Promise<SearchResult[]> => {
       // 根据搜索词获取全部源信息
       try {
+        // 先检查 sessionStorage 中是否有缓存
+        const cacheKey = `search_cache_${query.trim()}`;
+        let results: SearchResult[] = [];
+
+        if (typeof window !== 'undefined') {
+          try {
+            const cached = sessionStorage.getItem(cacheKey);
+            if (cached) {
+              console.log('[Play] 使用 sessionStorage 缓存的搜索结果');
+              const cachedData = JSON.parse(cached);
+
+              // 处理缓存的搜索结果，根据规则过滤
+              results = cachedData.filter(
+                (result: SearchResult) =>
+                  result.title.replaceAll(' ', '').toLowerCase() ===
+                    videoTitleRef.current.replaceAll(' ', '').toLowerCase() &&
+                  (videoYearRef.current
+                    ? result.year.toLowerCase() === videoYearRef.current.toLowerCase()
+                    : true) &&
+                  (searchType
+                    ? // openlist 源跳过 episodes 长度检查，因为搜索时不返回详细播放列表
+                      result.source === 'openlist' ||
+                      (searchType === 'tv' && result.episodes.length > 1) ||
+                      (searchType === 'movie' && result.episodes.length === 1)
+                    : true)
+              );
+
+              setAvailableSources(results);
+              return results;
+            }
+          } catch (error) {
+            console.error('[Play] 读取缓存失败:', error);
+            // 继续执行 API 调用
+          }
+        }
+
+        // 如果没有缓存，调用 API
         const response = await fetch(
           `/api/search?q=${encodeURIComponent(query.trim())}`
         );
@@ -1975,7 +2013,7 @@ function PlayPageClient() {
         const data = await response.json();
 
         // 处理搜索结果，根据规则过滤
-        const results = data.results.filter(
+        results = data.results.filter(
           (result: SearchResult) =>
             result.title.replaceAll(' ', '').toLowerCase() ===
               videoTitleRef.current.replaceAll(' ', '').toLowerCase() &&
@@ -2014,23 +2052,53 @@ function PlayPageClient() {
           : '🔍 正在搜索播放源...'
       );
 
-      let sourcesInfo = await fetchSourcesData(searchTitle || videoTitle);
-      if (
-        currentSource &&
-        currentId &&
-        !sourcesInfo.some(
-          (source) => source.source === currentSource && source.id === currentId
-        )
-      ) {
-        sourcesInfo = await fetchSourceDetail(currentSource, currentId);
+      // 如果已经有了source和id，优先通过单个详情接口快速获取
+      let detailData: SearchResult | null = null;
+      let sourcesInfo: SearchResult[] = [];
+
+      if (currentSource && currentId) {
+        // 先快速获取当前源的详情
+        try {
+          const currentSourceDetail = await fetchSourceDetail(currentSource, currentId);
+          if (currentSourceDetail.length > 0) {
+            detailData = currentSourceDetail[0];
+            sourcesInfo = currentSourceDetail;
+          }
+        } catch (err) {
+          console.error('获取当前源详情失败:', err);
+        }
+
+        // 异步获取其他源信息，不阻塞播放
+        setBackgroundSourcesLoading(true);
+        fetchSourcesData(searchTitle || videoTitle).then((sources) => {
+          // 合并当前源和搜索到的其他源
+          const allSources = [...sourcesInfo];
+          sources.forEach((source) => {
+            // 避免重复添加当前源
+            if (!(source.source === currentSource && source.id === currentId)) {
+              allSources.push(source);
+            }
+          });
+          setAvailableSources(allSources);
+          setBackgroundSourcesLoading(false);
+        }).catch((err) => {
+          console.error('异步获取其他源失败:', err);
+          setBackgroundSourcesLoading(false);
+        });
+      } else {
+        // 没有source和id，正常搜索流程
+        sourcesInfo = await fetchSourcesData(searchTitle || videoTitle);
       }
-      if (sourcesInfo.length === 0) {
+
+      if (!detailData && sourcesInfo.length === 0) {
         setError('未找到匹配结果');
         setLoading(false);
         return;
       }
 
-      let detailData: SearchResult = sourcesInfo[0];
+      if (!detailData) {
+        detailData = sourcesInfo[0];
+      }
       // 指定源和id且无需优选
       if (currentSource && currentId && !needPreferRef.current) {
         const target = sourcesInfo.find(
@@ -5057,7 +5125,7 @@ function PlayPageClient() {
                 <div className='mt-3 px-2 lg:flex-shrink-0'>
                   <div className='bg-white/50 dark:bg-gray-800/50 backdrop-blur-sm rounded-lg p-2 border border-gray-200/50 dark:border-gray-700/50 w-full lg:w-auto overflow-x-auto'>
                     <div className='flex gap-1.5 flex-nowrap lg:flex-wrap items-center'>
-                      <div className='flex gap-1.5 flex-nowrap lg:flex-wrap'>
+                      <div className='flex gap-1.5 flex-nowrap lg:flex-wrap lg:justify-end lg:flex-1'>
                         {/* 下载按钮 */}
                         <button
                           onClick={(e) => {
@@ -5306,6 +5374,7 @@ function PlayPageClient() {
                 availableSources={availableSources}
                 sourceSearchLoading={sourceSearchLoading}
                 sourceSearchError={sourceSearchError}
+                backgroundSourcesLoading={backgroundSourcesLoading}
                 precomputedVideoInfo={precomputedVideoInfo}
                 onDanmakuSelect={handleDanmakuSelect}
                 currentDanmakuSelection={currentDanmakuSelection}
