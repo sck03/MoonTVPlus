@@ -3928,28 +3928,21 @@ function PlayPageClient() {
     if (correction) {
       console.log('应用纠错信息:', correction);
 
-      // 只更新显示相关的状态，不更新 detail（避免触发播放器刷新）
-      if (correction.title) {
-        setVideoTitle(correction.title);
-      }
-      if (correction.posterPath) {
-        // 补全 TMDB 图片 URL
-        const fullPosterUrl = getTMDBImageUrl(correction.posterPath);
-        setVideoCover(fullPosterUrl);
-      }
-      if (correction.doubanId) {
-        const doubanIdNum = typeof correction.doubanId === 'string'
-          ? parseInt(correction.doubanId, 10)
-          : correction.doubanId;
-        setVideoDoubanId(doubanIdNum);
+      // 应用纠错信息到 detail
+      const updatedDetail = applyCorrection(detail, correction);
+
+      // 更新所有相关状态
+      setDetail(updatedDetail);
+      setVideoTitle(updatedDetail.title);
+      setVideoCover(updatedDetail.poster);
+      if (updatedDetail.douban_id) {
+        setVideoDoubanId(updatedDetail.douban_id);
       }
 
-      // 更新 detailRef，这样其他地方使用 detailRef 时能获取到最新信息
-      if (detailRef.current) {
-        detailRef.current = applyCorrection(detailRef.current, correction);
-      }
+      // 更新 detailRef
+      detailRef.current = updatedDetail;
 
-      console.log('已应用纠错信息（页面刷新后将完全生效）');
+      console.log('已应用纠错信息到当前视频详情:', updatedDetail);
     }
   };
 
@@ -5964,7 +5957,7 @@ function PlayPageClient() {
 
     // 调用异步初始化函数
     initPlayer();
-  }, [videoUrl, loading, blockAdEnabled, currentEpisodeIndex, detail]);
+  }, [videoUrl, loading, blockAdEnabled, currentEpisodeIndex, detail?.subtitles]);
 
   // 当组件卸载时清理定时器、Wake Lock 和播放器资源
   useEffect(() => {

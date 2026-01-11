@@ -214,6 +214,7 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
           quality: '错误',
           loadSpeed: '未知',
           pingTime: 0,
+          bitrate: '未知',
           hasError: true,
         })
       );
